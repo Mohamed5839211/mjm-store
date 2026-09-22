@@ -38,6 +38,10 @@ jobs:
         image: mariadb:11
         env:
           MARIADB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+          # Lets the service start when the secret is missing so the
+          # "Validate required secrets" step below can fail LOUDLY with the
+          # missing names. No real password here; CI uses mjm_store_test only.
+          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "yes"
           MARIADB_DATABASE: mjm_store_test
         ports:
           - 3306:3306
@@ -88,12 +92,15 @@ jobs:
       - name: Install Chromium (browser only)
         run: npx playwright install --with-deps chromium
 
+      # NOTE: the `secrets` context is not allowed in step `if` conditions
+      # (invalid workflow file). The admin secrets are already mirrored to
+      # job env (PLAYWRIGHT_ADMIN_*), so gate on `env` instead.
       - name: Playwright full suite (admin secrets present)
-        if: secrets.ADMIN_EMAIL != '' && secrets.ADMIN_PASSWORD != ''
+        if: env.PLAYWRIGHT_ADMIN_EMAIL != '' && env.PLAYWRIGHT_ADMIN_PASSWORD != ''
         run: npx playwright test --project=chromium --reporter=list,html
 
       - name: Playwright public-only (ADMIN_* missing — admin specs skipped loudly)
-        if: secrets.ADMIN_EMAIL == '' || secrets.ADMIN_PASSWORD == ''
+        if: env.PLAYWRIGHT_ADMIN_EMAIL == '' || env.PLAYWRIGHT_ADMIN_PASSWORD == ''
         run: |
           echo "::notice::ADMIN_EMAIL/ADMIN_PASSWORD not set — running public subset only (smoke, public, catalog, errors). Admin specs skipped, not failed."
           npx playwright test --project=chromium --reporter=list,html tests/smoke tests/public tests/catalog tests/errors

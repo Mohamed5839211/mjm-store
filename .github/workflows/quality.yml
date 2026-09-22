@@ -31,6 +31,11 @@ jobs:
     defaults:
       run:
         working-directory: ./frontend
+    env:
+      # next build inlines NEXT_PUBLIC_* with NODE_ENV=production, and
+      # src/config/env.ts refuses a localhost fallback in production.
+      # Plain localhost placeholder for the build check (no secret).
+      NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
     steps:
       - uses: actions/checkout@v4
 

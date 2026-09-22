@@ -29,6 +29,10 @@ jobs:
         image: mariadb:11
         env:
           MARIADB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+          # Lets the service start when the secret is missing so the
+          # "Validate required secrets" step below can fail LOUDLY with the
+          # missing names. No real password here; CI uses mjm_store_test only.
+          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "yes"
           MARIADB_DATABASE: mjm_store_test
         ports:
           - 3306:3306
