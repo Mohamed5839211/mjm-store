@@ -1,0 +1,1 @@
+INSERT INTO admin_users (email, name, password_hash, role) VALUES ('admin@mjm.com', 'مدير النظام', '$2b$12$nCgT0YFjONQtzxyxp7S03uwHz1h9uESLuuAep8Fn7gKX/NM.6k4fC', 'super_admin') ON DUPLICATE KEY UPDATE name='مدير النظام';

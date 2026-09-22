@@ -1,0 +1,82 @@
+# MJM Store — Quality gates (fast, no DB, no secrets needed).
+#
+# Runs on every PR + push to main: TypeScript, ESLint, production builds
+# and mocked backend unit tests. Uses ONLY real repo scripts/commands:
+#   frontend: npx tsc --noEmit | npm run lint (eslint, WITHOUT --fix so CI
+#             never mutates files) | npm run build
+#   backend:  ./node_modules/.bin/tsc --noEmit | npx eslint (same globs as
+#             the repo `lint` script, without --fix) | npm run build |
+#             npm test (jest unit, all specs are mocked — no database)
+# A failing check fails the job (no continue-on-error, no forced success).
+
+name: quality
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: frontend quality
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install (npm ci)
+        run: npm ci
+
+      - name: TypeScript (noEmit)
+        run: npx tsc --noEmit
+
+      - name: ESLint (no --fix in CI)
+        run: npx eslint .
+
+      - name: Production build
+        run: npm run build
+
+  backend:
+    name: backend quality
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install (npm ci)
+        run: npm ci
+
+      - name: TypeScript (noEmit)
+        run: ./node_modules/.bin/tsc --noEmit
+
+      - name: ESLint (repo globs, no --fix in CI)
+        run: npx eslint "{src,apps,libs,test}/**/*.ts"
+
+      - name: Unit tests (jest, mocked — no DB)
+        run: npm test -- --runInBand
+
+      - name: Production build
+        run: npm run build

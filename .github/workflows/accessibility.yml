@@ -1,0 +1,96 @@
+# MJM Store — Accessibility (axe-core via Playwright, Chromium).
+#
+# Runs tests/accessibility --project=chromium with zero axe rule changes:
+# any genuine axe violation fails the job (expectNoAxeViolations).
+# Same isolated test-DB prep as playwright.yml (MariaDB service +
+# migrate + seed_all). No secrets in logs or artifacts.
+
+name: accessibility
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: accessibility-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  axe-chromium:
+    name: axe-core (chromium)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+          MARIADB_DATABASE: mjm_store_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ${{ secrets.DATABASE_URL_TEST != '' && secrets.DATABASE_URL_TEST || format('mysql://root:{0}@127.0.0.1:3306/mjm_store_test', secrets.DB_ROOT_PASSWORD) }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+      FRONTEND_URL: http://localhost:3002
+      NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
+      PLAYWRIGHT_ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      PLAYWRIGHT_ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Validate required secrets (names only)
+        run: |
+          missing=""
+          [ -z "${{ secrets.DB_ROOT_PASSWORD }}" ] && [ -z "${{ secrets.DATABASE_URL_TEST }}" ] && missing="$missing DB_ROOT_PASSWORD(or DATABASE_URL_TEST)"
+          [ -z "${{ secrets.JWT_SECRET }}" ] && [ -z "${{ secrets.JWT_REFRESH_SECRET }}" ] && missing="$missing JWT_SECRET"
+          [ -z "${{ secrets.JWT_REFRESH_SECRET }}" ] && missing="$missing JWT_REFRESH_SECRET"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets:$missing — see CI_TESTING_GUIDE.md"
+            exit 1
+          fi
+
+      - name: Install backend + frontend (npm ci)
+        run: |
+          npm ci --prefix ../backend
+          npm ci
+
+      - name: Migrate + seed test DB (mjm_store_test only)
+        working-directory: ./backend
+        run: |
+          npx prisma generate
+          npx prisma migrate deploy
+          npx ts-node -r dotenv/config prisma/seed_all.ts
+
+      - name: Install Chromium (browser only)
+        run: npx playwright install --with-deps chromium
+
+      - name: Accessibility suite (no axe rules disabled)
+        run: npx playwright test tests/accessibility --project=chromium --reporter=list,html
+
+      - name: Upload accessibility-report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accessibility-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+            frontend/ACCESSIBILITY_TEST_REPORT.md
+          if-no-files-found: warn

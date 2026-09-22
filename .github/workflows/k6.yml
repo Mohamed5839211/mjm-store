@@ -1,0 +1,215 @@
+# MJM Store — k6 load tests. MANUAL ONLY (workflow_dispatch, never on PR/push).
+#
+# Inputs: stage (default smoke — high is opt-in) and scenario
+# (all|public|authenticated|login|admin, default public).
+# Safety: localhost + mjm_store_test only; GET reads + login POSTs only
+# (the scripts reference no destructive endpoint); gradual stages only.
+#
+# Credentials: TEST_USER_* / ADMIN_* secrets when present. Otherwise an
+# EPHEMERAL customer is registered via the API with a random address and
+# password generated inside the run (never written to files, masked in
+# logs); the admin scenario is then SKIPPED WITH NOTICE (no silent skip).
+#
+# 429 tolerance: k6's exit code conflates EXPECTED 429/401 threshold
+# breaches with real failures, so the k6 step uses continue-on-error for
+# exactly this documented reason, and the NEXT step (evaluate, always runs)
+# parses every summary JSON and FAILS the job on any server_errors>0,
+# status_5xx>0, timeouts>0, or secret patterns in outputs. Unexpected 5xx
+# and timeouts therefore still fail the workflow; expected 429/401 do not.
+
+name: k6
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'Load stage (gradual; high is opt-in)'
+        type: choice
+        required: true
+        default: smoke
+        options: [smoke, baseline, medium, high, login-peak]
+      scenario:
+        description: 'Scenario set to run'
+        type: choice
+        required: true
+        default: public
+        options: [all, public, authenticated, login, admin]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: k6-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  load:
+    name: k6 ${{ inputs.scenario }} @ ${{ inputs.stage }}
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+          MARIADB_DATABASE: mjm_store_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ${{ secrets.DATABASE_URL_TEST != '' && secrets.DATABASE_URL_TEST || format('mysql://root:{0}@127.0.0.1:3306/mjm_store_test', secrets.DB_ROOT_PASSWORD) }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+      FRONTEND_URL: http://localhost:3002
+      NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Validate required secrets (names only)
+        run: |
+          missing=""
+          [ -z "${{ secrets.DB_ROOT_PASSWORD }}" ] && [ -z "${{ secrets.DATABASE_URL_TEST }}" ] && missing="$missing DB_ROOT_PASSWORD(or DATABASE_URL_TEST)"
+          [ -z "${{ secrets.JWT_SECRET }}" ] && missing="$missing JWT_SECRET"
+          [ -z "${{ secrets.JWT_REFRESH_SECRET }}" ] && missing="$missing JWT_REFRESH_SECRET"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets:$missing — see CI_TESTING_GUIDE.md"
+            exit 1
+          fi
+
+      - name: Guard — localhost + test DB only
+        run: |
+          case "$DATABASE_URL" in
+            *mjm_store_test*) ;;
+            *) echo "::error::Refusing non-test database for k6"; exit 1;;
+          esac
+          grep -rEo 'https?://[^"'"'"' ]+' tests/k6/ | grep -v -E 'localhost|127\.0\.0\.1' \
+            && { echo "::error::Non-localhost URL in tests/k6"; exit 1; } || true
+          # Comment lines (// or leading *) are excluded: they document the
+          # read-only policy, they are not endpoint references.
+          ! grep -rEi 'checkout|payment|delete|webhook' tests/k6/*.js \
+              | grep -vE ':[0-9]+:\s*(\*|//)' \
+            || { echo "::error::Destructive endpoint referenced in tests/k6"; exit 1; }
+          echo "k6 scope OK."
+
+      - name: Install backend (npm ci)
+        working-directory: ./backend
+        run: npm ci
+
+      - name: Migrate + seed test DB (mjm_store_test only)
+        working-directory: ./backend
+        run: |
+          npx prisma generate
+          npx prisma migrate deploy
+          npx ts-node -r dotenv/config prisma/seed_all.ts
+
+      - name: Build + start backend (prod)
+        working-directory: ./backend
+        run: |
+          npm run build
+          (npm run start:prod > /tmp/backend.log 2>&1 &)
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:3001/api/v1/products?limit=1 >/dev/null && break
+            sleep 5
+          done
+
+      - name: Install k6 (pinned binary, no sudo)
+        run: |
+          K6_VERSION=2.3.0
+          curl -sSfL "https://github.com/grafana/k6/releases/download/v${K6_VERSION}/k6-v${K6_VERSION}-linux-amd64.tar.gz" \
+            | tar -xzf - -C /tmp
+          /tmp/k6-v${K6_VERSION}-linux-amd64/k6 version
+          echo "/tmp/k6-v${K6_VERSION}-linux-amd64" >> "$GITHUB_PATH"
+
+      - name: Resolve credentials (secrets or ephemeral test customer)
+        id: creds
+        run: |
+          if [ -n "${{ secrets.TEST_USER_EMAIL }}" ] && [ -n "${{ secrets.TEST_USER_PASSWORD }}" ]; then
+            echo "TEST_USER_EMAIL=${{ secrets.TEST_USER_EMAIL }}" >> "$GITHUB_ENV"
+            echo "TEST_USER_PASSWORD=${{ secrets.TEST_USER_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "customer_source=secrets" >> "$GITHUB_OUTPUT"
+          else
+            STAMP="$(date +%s%N)-$RANDOM"
+            EMAIL="k6-ci-${STAMP}@example.local"
+            PASS="$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)"
+            PHONE="05$(echo "$STAMP" | cut -c1-8)"
+            CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:3001/api/v1/auth/register \
+              -H 'Content-Type: application/json' \
+              -d "{\"name\":\"K6 CI\",\"email\":\"$EMAIL\",\"phone\":\"$PHONE\",\"password\":\"$PASS\"}")"
+            [ "$CODE" = "200" ] || [ "$CODE" = "201" ] || { echo "::error::Ephemeral customer registration failed ($CODE)"; exit 1; }
+            echo "TEST_USER_EMAIL=$EMAIL" >> "$GITHUB_ENV"
+            echo "TEST_USER_PASSWORD=$PASS" >> "$GITHUB_ENV"
+            echo "customer_source=ephemeral" >> "$GITHUB_OUTPUT"
+            echo "::notice::TEST_USER_* secrets missing — ephemeral test customer registered for this run only."
+          fi
+          if [ -n "${{ secrets.ADMIN_EMAIL }}" ] && [ -n "${{ secrets.ADMIN_PASSWORD }}" ]; then
+            echo "ADMIN_EMAIL=${{ secrets.ADMIN_EMAIL }}" >> "$GITHUB_ENV"
+            echo "ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "admin_source=secrets" >> "$GITHUB_OUTPUT"
+          else
+            echo "admin_source=missing" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: k6 run (threshold breaches from expected 429/401 do not gate here)
+        id: k6run
+        continue-on-error: true # documented: real gating happens in 'evaluate results' below
+        run: |
+          set -o pipefail # keep k6's own exit code visible through tee
+          mkdir -p reports/k6
+          run_one() { # $1 = scenario file (no ext), $2 = STAGE
+            k6 run -e "STAGE=$2" --summary-export "reports/k6/$1-$2.json" "tests/k6/$1.js" 2>&1 | tee "reports/k6/$1-$2.log"
+          }
+          SC="${{ inputs.scenario }}"; ST="${{ inputs.stage }}"
+          [ "$SC" = "all" ] || [ "$SC" = "public" ] && run_one public-read "$ST"
+          if [ "$SC" = "all" ] || [ "$SC" = "authenticated" ]; then
+            run_one authenticated-read "$ST"
+          fi
+          if [ "$SC" = "all" ] || [ "$SC" = "login" ]; then
+            LK="login"; [ "$ST" = "high" ] || [ "$ST" = "medium" ] && LK="login-peak"
+            run_one login "$LK"
+          fi
+          if [ "$SC" = "all" ] || [ "$SC" = "admin" ]; then
+            if [ "${{ steps.creds.outputs.admin_source }}" = "secrets" ]; then
+              run_one admin-read "$ST"
+            else
+              echo "::notice::ADMIN_* secrets missing — admin-read skipped loudly (no silent skip)."
+            fi
+          fi
+
+      - name: Evaluate results (5xx/timeouts/secrets fail the job; 429/401 do not)
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, glob, re, sys
+          bad = []
+          for f in sorted(glob.glob('reports/k6/*.json')):
+              try:
+                  m = json.load(open(f))['metrics']
+              except Exception as e:
+                  bad.append(f'{f}: unreadable summary ({e})'); continue
+              g = lambda k: (m.get(k, {}) or {}).get('count', 0)
+              for key in ('server_errors', 'timeouts', 'status_5xx', 'secret_leak_indicators'):
+                  if g(key) > 0:
+                      bad.append(f'{f}: {key}={g(key)}')
+              txt = open(f, errors='replace').read()
+              if re.search(r'eyJ[A-Za-z0-9_-]{8,}\.', txt):
+                  bad.append(f'{f}: raw JWT in summary (scrub setup_data)')
+          if bad:
+              print('::error::k6 hard-failure signals:'); [print(' -', b) for b in bad]; sys.exit(1)
+          print('k6 evaluation passed: no 5xx, no timeouts, no leaked secrets (429/401 tolerated by design).')
+          EOF
+
+      - name: Upload k6-results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-results
+          path: reports/k6/
+          if-no-files-found: warn

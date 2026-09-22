@@ -1,0 +1,153 @@
+# MJM Store — OWASP ZAP baseline (official image via Docker).
+#
+# Safety contract (enforced in-job, mirrors the local ZAP phase):
+# - Targets are localhost literals ONLY (guard step aborts otherwise).
+# - Test database mjm_store_test ONLY (backend env pinned below).
+# - Baseline/Passive scan ONLY: zap-baseline.py with NO attack/active-scan
+#   flags. No checkout/payment/delete/mutation traffic, no production.
+# - No secrets in logs or artifacts (ZAP reports contain no credentials).
+#
+# Docker IS available on ubuntu-latest runners. If `docker info` ever fails,
+# the job writes ZAP-SKIPPED.md with the reason, uploads it, and FAILS LOUDLY
+# (exit 1) — a security gate must never be skipped silently.
+# ZAP's own exit code is kept: Medium+ findings fail the job (no masking).
+
+name: security
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+  schedule:
+    - cron: '0 3 * * 1' # weekly Monday 03:00 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zap-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  zap-baseline:
+    name: zap baseline (localhost, test DB)
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+          MARIADB_DATABASE: mjm_store_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ${{ secrets.DATABASE_URL_TEST != '' && secrets.DATABASE_URL_TEST || format('mysql://root:{0}@127.0.0.1:3306/mjm_store_test', secrets.DB_ROOT_PASSWORD) }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+      FRONTEND_URL: http://localhost:3002
+      NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
+      FE_TARGET: http://localhost:3002
+      API_TARGET: http://localhost:3001/api/v1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Validate required secrets (names only)
+        run: |
+          missing=""
+          [ -z "${{ secrets.DB_ROOT_PASSWORD }}" ] && [ -z "${{ secrets.DATABASE_URL_TEST }}" ] && missing="$missing DB_ROOT_PASSWORD(or DATABASE_URL_TEST)"
+          [ -z "${{ secrets.JWT_SECRET }}" ] && missing="$missing JWT_SECRET"
+          [ -z "${{ secrets.JWT_REFRESH_SECRET }}" ] && missing="$missing JWT_REFRESH_SECRET"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets:$missing — see CI_TESTING_GUIDE.md"
+            exit 1
+          fi
+
+      - name: Guard — localhost targets + test DB only
+        run: |
+          case "$FE_TARGET $API_TARGET" in
+            http://localhost*|http://127.0.0.1*) ;;
+            *) echo "::error::Refusing non-localhost ZAP target"; exit 1;;
+          esac
+          case "$DATABASE_URL" in
+            *mjm_store_test*) ;;
+            *) echo "::error::Refusing non-test database for ZAP scan"; exit 1;;
+          esac
+          echo "Scope OK: $FE_TARGET , $API_TARGET (test DB)."
+
+      - name: Install backend + frontend (npm ci)
+        run: |
+          npm ci --prefix backend
+          npm ci --prefix frontend
+
+      - name: Migrate + seed test DB (mjm_store_test only)
+        working-directory: ./backend
+        run: |
+          npx prisma generate
+          npx prisma migrate deploy
+          npx ts-node -r dotenv/config prisma/seed_all.ts
+
+      - name: Production builds
+        run: |
+          npm run build --prefix backend
+          npm run build --prefix frontend
+
+      - name: Start backend (prod) + frontend (next start)
+        run: |
+          (npm run start:prod --prefix backend > /tmp/backend.log 2>&1 &)
+          (npm run start --prefix frontend -- -p 3002 > /tmp/frontend.log 2>&1 &)
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:3001/api/docs >/dev/null && curl -sf http://localhost:3002/ >/dev/null && break
+            sleep 5
+          done
+          curl -sf http://localhost:3001/api/docs >/dev/null
+          curl -sf http://localhost:3002/ >/dev/null
+
+      - name: Docker availability (loud failure, never silent)
+        run: |
+          mkdir -p reports/zap
+          if ! docker info >/dev/null 2>&1; then
+            {
+              echo "# ZAP skipped — Docker unavailable on this runner"
+              echo "Date: $(date -u +%FT%TZ)"
+              echo "Reason: 'docker info' failed. The official OWASP ZAP image"
+              echo "requires Docker; without it no equivalent scan was substituted."
+              echo "Action: re-run on ubuntu-latest or provide a Docker host."
+            } > reports/zap/ZAP-SKIPPED.md
+            echo "::error::Docker unavailable — ZAP scan impossible. See ZAP-SKIPPED.md."
+            exit 1
+          fi
+          docker --version
+
+      - name: ZAP baseline — frontend (no active scan)
+        run: |
+          docker run --rm --network host \
+            -v "$GITHUB_WORKSPACE/reports/zap:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t "$FE_TARGET" \
+              -J zap-frontend-baseline.json -r zap-frontend-baseline.html
+
+      - name: ZAP baseline — API (no active scan)
+        run: |
+          docker run --rm --network host \
+            -v "$GITHUB_WORKSPACE/reports/zap:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t "$API_TARGET" \
+              -J zap-api-baseline.json -r zap-api-baseline.html
+
+      - name: Upload zap-reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-reports
+          path: reports/zap/
+          if-no-files-found: warn

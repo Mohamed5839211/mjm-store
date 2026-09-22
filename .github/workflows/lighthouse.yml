@@ -1,0 +1,126 @@
+# MJM Store — Lighthouse (manual + main only, never on PRs: slow).
+#
+# Production builds (backend start:prod + next start) on the isolated test
+# DB, then `npx lighthouse` (repo devDependency) on core pages, desktop +
+# mobile. Raw JSON/HTML reports upload as artifacts.
+# No pass/fail performance assertions yet: small deltas must NOT fail the
+# job before a clear baseline is agreed (documented decision).
+
+name: lighthouse
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lighthouse-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: lighthouse audit
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+          MARIADB_DATABASE: mjm_store_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ${{ secrets.DATABASE_URL_TEST != '' && secrets.DATABASE_URL_TEST || format('mysql://root:{0}@127.0.0.1:3306/mjm_store_test', secrets.DB_ROOT_PASSWORD) }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+      FRONTEND_URL: http://localhost:3002
+      NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Validate required secrets (names only)
+        run: |
+          missing=""
+          [ -z "${{ secrets.DB_ROOT_PASSWORD }}" ] && [ -z "${{ secrets.DATABASE_URL_TEST }}" ] && missing="$missing DB_ROOT_PASSWORD(or DATABASE_URL_TEST)"
+          [ -z "${{ secrets.JWT_SECRET }}" ] && missing="$missing JWT_SECRET"
+          [ -z "${{ secrets.JWT_REFRESH_SECRET }}" ] && missing="$missing JWT_REFRESH_SECRET"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets:$missing — see CI_TESTING_GUIDE.md"
+            exit 1
+          fi
+
+      - name: Install backend + frontend (npm ci)
+        run: |
+          npm ci --prefix backend
+          npm ci --prefix frontend
+
+      - name: Migrate + seed test DB (mjm_store_test only)
+        working-directory: ./backend
+        run: |
+          npx prisma generate
+          npx prisma migrate deploy
+          npx ts-node -r dotenv/config prisma/seed_all.ts
+
+      - name: Production builds
+        run: |
+          npm run build --prefix backend
+          npm run build --prefix frontend
+
+      - name: Start backend (prod) + frontend (next start)
+        run: |
+          (npm run start:prod --prefix backend > /tmp/backend.log 2>&1 &)
+          (npm run start --prefix frontend -- -p 3002 > /tmp/frontend.log 2>&1 &)
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:3001/api/docs >/dev/null && curl -sf http://localhost:3002/ >/dev/null && break
+            sleep 5
+          done
+          curl -sf http://localhost:3001/api/docs >/dev/null
+          curl -sf http://localhost:3002/ >/dev/null
+
+      - name: Install Chromium for Lighthouse
+        working-directory: ./frontend
+        run: npx playwright install --only-shell chromium
+
+      - name: Lighthouse (core pages, desktop + mobile)
+        working-directory: ./frontend
+        run: |
+          mkdir -p reports/lighthouse
+          CHROME="$(find ~/.cache/ms-playwright -name headless_shell -type f | head -1)"
+          [ -n "$CHROME" ] || { echo "::error::Chromium headless shell not found"; exit 1; }
+          for page in "" "shop" "auth/login"; do
+            slug="${page:-home}"
+            slug="${slug//\//-}"
+            for form in desktop mobile; do
+              if [ "$form" = "mobile" ]; then EXTRA="--screenEmulation.mobile --screenEmulation.width=390 --screenEmulation.height=844 --screenEmulation.deviceScaleFactor=3"; else EXTRA=""; fi
+              # shellcheck disable=SC2086
+              npx lighthouse "http://localhost:3002/$page" \
+                --chrome-path="$CHROME" --chrome-flags="--no-sandbox --headless --disable-gpu" \
+                --output=json --output=html \
+                --output-path="reports/lighthouse/$slug.$form" \
+                --only-categories=performance,accessibility,best-practices,seo \
+                $EXTRA
+            done
+          done
+
+      - name: Upload lighthouse-reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-reports
+          path: |
+            frontend/reports/lighthouse/
+            frontend/LIGHTHOUSE_TEST_REPORT.md
+          if-no-files-found: warn

@@ -1,0 +1,169 @@
+@import "tailwindcss";
+
+/* Class-based dark mode (manual toggle). Do NOT rely on the media query:
+   the theme is user-controlled, with the OS preference used only once as
+   the initial value. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  color-scheme: light;
+  --background: #fafbfc;
+  --foreground: #1b2a4a;
+  --primary: #1b2a4a;
+  /* Darkened gold for light-mode text: #d4a853 fails WCAG AA (3.3:1 on
+     white). #8a6a1f (bronze) passes at 5.5:1 while staying gold-hued.
+     Fills (bg-secondary) also darken — white text on them still passes. */
+  --secondary: #8a6a1f;
+  --accent: #2ec4b6;
+  --card: #ffffff;
+  --border: #e2e8f0;
+  /* Semantic text tokens: `ink` for headings/strong text, `muted` for
+     secondary text. Light values match the original palette exactly. */
+  --ink: #1b2a4a;
+  --muted: #64748b;
+}
+
+/* Night palette — hand-tuned for contrast, not an auto-inversion:
+   - ink/off-white headings ≈ 13:1 on the night background
+   - muted slate ≈ 7:1 (body-comfortable, never washed)
+   - gold lifted one step so it keeps glowing on navy
+   - primary fills stay navy: white-text buttons keep working untouched */
+.dark {
+  color-scheme: dark;
+  --background: #0b1220;
+  --foreground: #e9eef7;
+  --card: #121c33;
+  --border: #22304d;
+  --ink: #e9eef7;
+  --muted: #9fb0cc;
+  --secondary: #e3b95c;
+}
+
+@theme {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-secondary: var(--secondary);
+  --color-accent: var(--accent);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  /* Deep bronze for SMALL gold text on light surfaces (≈5:1 on white).
+     Always pair as `text-bronze dark:text-secondary`: gold glows at night,
+     bronze reads by day. Never use for fills. */
+  --color-bronze: #8a6a1f;
+
+  --font-cairo: "Cairo", sans-serif;
+  --font-inter: "Inter", sans-serif;
+}
+
+/* Gold text on DARK backgrounds (hero sections, dark cards).
+   Light mode: #d4a853 (original gold, 6.4:1 on #1b2a4a).
+   Dark mode: #e3b95c (lifted gold, 7+:1 on #0b1220).
+   Use `text-gold` instead of `text-secondary` when the text sits on a
+   dark surface in BOTH modes. */
+@utility text-gold {
+  color: #d4a853;
+  .dark & {
+    color: #e3b95c;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  /* Safety net only: the manual `.dark` class above owns the night theme.
+     A blocking script applies the OS preference before first paint, so this
+     block only guards non-JS edge cases. */
+  :root:not(.dark):not(.light) {
+    color-scheme: light;
+    --background: #fafbfc;
+    --foreground: #1b2a4a;
+    --card: #ffffff;
+    --border: #e2e8f0;
+    --ink: #1b2a4a;
+    --muted: #64748b;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-cairo);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* RTL Support for Arabic */
+[dir="rtl"] {
+  font-family: var(--font-cairo);
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.dark .glass {
+  background: rgba(27, 42, 74, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* GPU Accelerated Custom Animations (60fps Target) */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+@keyframes glow {
+  0%, 100% { opacity: 0.5; filter: blur(20px); transform: scale(1); }
+  50% { opacity: 0.8; filter: blur(30px); transform: scale(1.05); }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-8px); }
+  40%, 80% { transform: translateX(8px); }
+}
+
+.animate-shimmer {
+  animation: shimmer 2s infinite linear;
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+.animate-glow {
+  animation: glow 4s ease-in-out infinite;
+}
+
+.animate-shake {
+  animation: shake 0.5s ease-in-out;
+}
+
+/* Hide scrollbars for horizontal scrollers while keeping scrollability */
+.no-scrollbar,
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar,
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Performance Utilities for Motion */
+.will-change-transform {
+  will-change: transform;
+}
+
+.will-change-opacity {
+  will-change: opacity;
+}

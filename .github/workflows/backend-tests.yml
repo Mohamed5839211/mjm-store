@@ -1,0 +1,93 @@
+# MJM Store — Backend tests (Jest unit + e2e) against an isolated MariaDB.
+#
+# - MariaDB 11 service (free, no paid services). Test-only database
+#   `mjm_store_test` created by the service (MARIADB_DATABASE). Production
+#   is never touched: e2e specs hardcode DATABASE_URL to mjm_store_test.
+# - Secrets required (names only, values stay masked):
+#     DB_ROOT_PASSWORD, JWT_SECRET (>=16 chars), JWT_REFRESH_SECRET (>=16)
+#   DATABASE_URL is derived from DB_ROOT_PASSWORD, or DATABASE_URL_TEST
+#   is used verbatim when provided. A fail-fast step lists missing names.
+# - Steps: prisma generate -> migrate deploy -> jest unit -> jest e2e.
+# - Real failures fail the job. Reports upload on failure only.
+
+name: backend-tests
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  jest:
+    name: jest unit + e2e
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+          MARIADB_DATABASE: mjm_store_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ${{ secrets.DATABASE_URL_TEST != '' && secrets.DATABASE_URL_TEST || format('mysql://root:{0}@127.0.0.1:3306/mjm_store_test', secrets.DB_ROOT_PASSWORD) }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Validate required secrets (names only, values never printed)
+        run: |
+          missing=""
+          [ -z "${{ secrets.DB_ROOT_PASSWORD }}" ] && [ -z "${{ secrets.DATABASE_URL_TEST }}" ] && missing="$missing DB_ROOT_PASSWORD(or DATABASE_URL_TEST)"
+          [ -z "${{ secrets.JWT_SECRET }}" ] && missing="$missing JWT_SECRET"
+          [ -z "${{ secrets.JWT_REFRESH_SECRET }}" ] && missing="$missing JWT_REFRESH_SECRET"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets:$missing — see CI_TESTING_GUIDE.md"
+            exit 1
+          fi
+          echo "Required secrets present."
+
+      - name: Install (npm ci)
+        run: npm ci
+
+      - name: Prisma generate + migrate deploy (test DB only)
+        run: |
+          npx prisma generate
+          npx prisma migrate deploy
+
+      - name: Jest unit tests
+        run: npm test -- --runInBand
+
+      - name: Jest e2e tests (self-seeding, test DB only)
+        run: npm run test:e2e -- --runInBand
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: |
+            backend/coverage/
+            backend/test-results/
+          if-no-files-found: ignore

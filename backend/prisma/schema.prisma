@@ -1,0 +1,472 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model Customer {
+  id                 Int                 @id @default(autoincrement())
+  name               String              @db.VarChar(255)
+  email              String              @unique @db.VarChar(255)
+  phone              String              @unique @db.VarChar(20)
+  passwordHash       String              @map("password_hash") @db.VarChar(255)
+  isBusiness         Boolean             @default(false) @map("is_business")
+  businessName       String?             @map("business_name") @db.VarChar(255)
+  crNumber           String?             @map("cr_number") @db.VarChar(50)
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+  addresses          Address[]
+  cart               Cart?
+  orders             Order[]
+  printingRequests   PrintingRequest[]
+  waterSubscriptions WaterSubscription[]
+  supportTickets     SupportTicket[]
+
+  @@map("customers")
+}
+
+model Address {
+  id             Int      @id @default(autoincrement())
+  customerId     Int      @map("customer_id")
+  city           String   @db.VarChar(100)
+  district       String   @db.VarChar(100)
+  street         String   @db.VarChar(255)
+  buildingNo     String   @map("building_no") @db.VarChar(50)
+  additionalInfo String?  @map("additional_info") @db.Text
+  isDefault      Boolean  @default(false) @map("is_default")
+  createdAt      DateTime @default(now()) @map("created_at")
+  customer       Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  orders         Order[]
+
+  @@index([customerId], map: "addresses_customer_id_fkey")
+  @@map("addresses")
+}
+
+model Product {
+  id             Int             @id @default(autoincrement())
+  name           String          @db.VarChar(255)
+  description    String?         @db.Text
+  categoryId     Int?            @map("category_id")
+  price          Decimal         @db.Decimal(10, 2)
+  discountPrice  Decimal?        @map("discount_price") @db.Decimal(10, 2)
+  weight         Decimal?        @db.Decimal(10, 3)
+  gallonCapacity Decimal?        @map("gallon_capacity") @db.Decimal(5, 1)
+  stockQuantity  Int             @default(0) @map("stock_quantity")
+  sku            String          @unique @db.VarChar(50)
+  isActive       Boolean         @default(true) @map("is_active")
+  isForB2bOnly   Boolean         @default(false) @map("is_for_b2b_only")
+  totalSold      Int             @default(0) @map("total_sold")
+  searchIndex    String?         @map("search_index") @db.Text
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+  category       Category?       @relation(fields: [categoryId], references: [id])
+  bundleItems    BundleItem[]
+  cartItems      CartItem[]
+  offerProducts  OfferProduct[]
+  orderItems     OrderItem[]
+  images         ProductImage[]
+
+  @@index([categoryId], map: "products_category_id_fkey")
+  @@map("products")
+}
+
+model Category {
+  id          Int       @id @default(autoincrement())
+  slug        String    @unique @db.VarChar(100)
+  name        String    @db.VarChar(255)
+  nameEn      String?   @map("name_en") @db.VarChar(255)
+  description String?   @db.Text
+  icon        String?   @db.VarChar(100)
+  image       String?   @db.VarChar(500)
+  color       String?   @db.VarChar(100)
+  accent      String?   @db.VarChar(100)
+  order       Int       @default(0)
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  products    Product[]
+
+  @@map("categories")
+}
+
+model ProductImage {
+  id        Int     @id @default(autoincrement())
+  productId Int     @map("product_id")
+  url       String  @db.VarChar(500)
+  altText   String? @map("alt_text") @db.VarChar(255)
+  sortOrder Int     @default(0) @map("sort_order")
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId], map: "product_images_product_id_fkey")
+  @@map("product_images")
+}
+
+model Bundle {
+  id            Int          @id @default(autoincrement())
+  name          String       @db.VarChar(255)
+  description   String?      @db.Text
+  bundlePrice   Decimal      @map("bundle_price") @db.Decimal(10, 2)
+  originalPrice Decimal      @map("original_price") @db.Decimal(10, 2)
+  badgeText     String?      @map("badge_text") @db.VarChar(100)
+  imageUrl      String?      @map("image_url") @db.VarChar(500)
+  isActive      Boolean      @default(true) @map("is_active")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+  items         BundleItem[]
+  cartItems     CartItem[]
+  orderItems    OrderItem[]
+
+  @@map("bundles")
+}
+
+model BundleItem {
+  id        Int     @id @default(autoincrement())
+  bundleId  Int     @map("bundle_id")
+  productId Int     @map("product_id")
+  quantity  Int     @default(1)
+  bundle    Bundle  @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([bundleId, productId])
+  @@index([productId], map: "bundle_items_product_id_fkey")
+  @@map("bundle_items")
+}
+
+model Offer {
+  id            Int            @id @default(autoincrement())
+  type          OfferType
+  discountValue Decimal        @map("discount_value") @db.Decimal(10, 2)
+  startDate     DateTime       @map("start_date")
+  endDate       DateTime       @map("end_date")
+  isActive      Boolean        @default(true) @map("is_active")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  offerProducts OfferProduct[]
+
+  @@map("offers")
+}
+
+model OfferProduct {
+  id        Int     @id @default(autoincrement())
+  offerId   Int     @map("offer_id")
+  productId Int     @map("product_id")
+  offer     Offer   @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([offerId, productId])
+  @@index([productId], map: "offer_products_product_id_fkey")
+  @@map("offer_products")
+}
+
+model Cart {
+  id         Int        @id @default(autoincrement())
+  customerId Int        @unique @map("customer_id")
+  createdAt  DateTime   @default(now()) @map("created_at")
+  updatedAt  DateTime   @updatedAt @map("updated_at")
+  items      CartItem[]
+  customer   Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@map("carts")
+}
+
+model CartItem {
+  id        Int      @id @default(autoincrement())
+  cartId    Int      @map("cart_id")
+  productId Int?     @map("product_id")
+  bundleId  Int?     @map("bundle_id")
+  quantity  Int      @default(1)
+  bundle    Bundle?  @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product   Product? @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([bundleId], map: "cart_items_bundle_id_fkey")
+  @@index([cartId], map: "cart_items_cart_id_fkey")
+  @@index([productId], map: "cart_items_product_id_fkey")
+  @@map("cart_items")
+}
+
+model Order {
+  id                Int           @id @default(autoincrement())
+  customerId        Int           @map("customer_id")
+  status            OrderStatus   @default(new_order)
+  totalAmount       Decimal       @map("total_amount") @db.Decimal(10, 2)
+  shippingFee       Decimal       @default(0.00) @map("shipping_fee") @db.Decimal(10, 2)
+  discountAmount    Decimal       @default(0.00) @map("discount_amount") @db.Decimal(10, 2)
+  paymentStatus     PaymentStatus @default(pending) @map("payment_status")
+  paymentMethod     PaymentMethod @map("payment_method")
+  shippingAddressId Int           @map("shipping_address_id")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+  items             OrderItem[]
+  customer          Customer      @relation(fields: [customerId], references: [id])
+  address           Address       @relation(fields: [shippingAddressId], references: [id])
+  shipment          Shipment?
+  invoice           Invoice?
+
+  @@index([customerId], map: "orders_customer_id_fkey")
+  @@index([shippingAddressId], map: "orders_shipping_address_id_fkey")
+  @@map("orders")
+}
+
+model OrderItem {
+  id         Int      @id @default(autoincrement())
+  orderId    Int      @map("order_id")
+  productId  Int?     @map("product_id")
+  bundleId   Int?     @map("bundle_id")
+  quantity   Int
+  unitPrice  Decimal  @map("unit_price") @db.Decimal(10, 2)
+  finalPrice Decimal  @map("final_price") @db.Decimal(10, 2)
+  bundle     Bundle?  @relation(fields: [bundleId], references: [id])
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product    Product? @relation(fields: [productId], references: [id])
+
+  @@index([bundleId], map: "order_items_bundle_id_fkey")
+  @@index([orderId], map: "order_items_order_id_fkey")
+  @@index([productId], map: "order_items_product_id_fkey")
+  @@map("order_items")
+}
+
+model PrintingRequest {
+  id               Int                   @id @default(autoincrement())
+  customerId       Int?                  @map("customer_id")
+  businessName     String                @map("business_name") @db.VarChar(255)
+  businessType     String                @map("business_type") @db.VarChar(100)
+  contactPerson    String                @map("contact_person") @db.VarChar(255)
+  phone            String                @db.VarChar(20)
+  email            String                @db.VarChar(255)
+  productType      String                @map("product_type") @db.VarChar(100)
+  expectedQuantity Int                   @map("expected_quantity")
+  logoUrl          String?               @map("logo_url") @db.VarChar(500)
+  notes            String?               @db.Text
+  status           PrintingRequestStatus @default(new_request)
+  quotedPrice      Decimal?              @map("quoted_price") @db.Decimal(10, 2)
+  internalNotes    String?               @map("internal_notes") @db.Text
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+  customer         Customer?             @relation(fields: [customerId], references: [id])
+
+  @@index([customerId], map: "printing_requests_customer_id_fkey")
+  @@map("printing_requests")
+}
+
+model WaterSubscription {
+  id               Int                   @id @default(autoincrement())
+  customerId       Int                   @map("customer_id")
+  type             SubscriptionType
+  quantityPerOrder Int                   @map("quantity_per_order")
+  frequency        SubscriptionFrequency
+  nextDeliveryDate DateTime?             @map("next_delivery_date")
+  status           SubscriptionStatus    @default(active)
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+  customer         Customer              @relation(fields: [customerId], references: [id])
+
+  @@index([customerId], map: "water_subscriptions_customer_id_fkey")
+  @@map("water_subscriptions")
+}
+
+model AdminUser {
+  id           Int       @id @default(autoincrement())
+  name         String    @db.VarChar(255)
+  email        String    @unique @db.VarChar(255)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  role         AdminRole @default(staff)
+  permissions  Json?
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("admin_users")
+}
+
+model CmsContent {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique @db.VarChar(100)
+  value     Json
+  updatedBy String?  @map("updated_by") @db.VarChar(255)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("cms_content")
+}
+
+model ShippingProvider {
+  id        Int                  @id @default(autoincrement())
+  name      String               @db.VarChar(100)
+  type      ShippingProviderType
+  apiKeys   Json?                @map("api_keys")
+  isActive  Boolean              @default(true) @map("is_active")
+  shipments Shipment[]
+
+  @@map("shipping_providers")
+}
+
+model Shipment {
+  id             Int              @id @default(autoincrement())
+  orderId        Int              @unique @map("order_id")
+  providerId     Int              @map("provider_id")
+  trackingNumber String?          @map("tracking_number") @db.VarChar(100)
+  labelUrl       String?          @map("label_url") @db.VarChar(500)
+  status         String           @default("pending") @db.VarChar(50)
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+  order          Order            @relation(fields: [orderId], references: [id])
+  provider       ShippingProvider @relation(fields: [providerId], references: [id])
+
+  @@index([providerId], map: "shipments_provider_id_fkey")
+  @@map("shipments")
+}
+
+model ShippingZone {
+  id                   Int      @id @default(autoincrement())
+  name                 String   @db.VarChar(100)
+  cities               Json     // List of cities in this zone
+  baseRate             Decimal  @map("base_rate") @db.Decimal(10, 2)
+  freeShippingThreshold Decimal? @map("free_shipping_threshold") @db.Decimal(10, 2)
+  isActive             Boolean  @default(true) @map("is_active")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@map("shipping_zones")
+}
+
+model Invoice {
+  id            Int      @id @default(autoincrement())
+  invoiceNumber String   @unique @map("invoice_number") @db.VarChar(50)
+  orderId       Int      @unique @map("order_id")
+  pdfUrl        String?  @map("pdf_url") @db.VarChar(500)
+  totalAmount   Decimal  @map("total_amount") @db.Decimal(10, 2)
+  vatAmount     Decimal  @map("vat_amount") @db.Decimal(10, 2)
+  status        String   @default("issued") @db.VarChar(50)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  order         Order    @relation(fields: [orderId], references: [id])
+
+  @@map("invoices")
+}
+
+
+enum OfferType {
+  B1G1
+  percentage
+  fixed_bundle_offer
+  second_item_for_1_sar
+}
+
+enum OrderStatus {
+  new_order
+  processing
+  packed
+  shipped
+  delivered
+  cancelled
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  failed
+  refunded
+}
+
+enum PaymentMethod {
+  mada
+  visa
+  apple_pay
+  tamara
+  cod
+}
+
+enum PrintingRequestStatus {
+  new_request
+  under_review
+  quoted
+  approved
+  rejected
+  completed
+}
+
+enum SubscriptionType {
+  one_time
+  monthly
+}
+
+enum SubscriptionFrequency {
+  weekly
+  monthly
+}
+
+enum SubscriptionStatus {
+  active
+  paused
+  cancelled
+}
+
+enum AdminRole {
+  super_admin
+  manager
+  staff
+}
+
+enum ShippingProviderType {
+  aramex
+  saee
+  box_company
+}
+
+model SupportTicket {
+  id         Int            @id @default(autoincrement())
+  customerId Int            @map("customer_id")
+  subject    String         @db.VarChar(255)
+  status     TicketStatus   @default(open)
+  priority   TicketPriority @default(medium)
+  createdAt  DateTime       @default(now()) @map("created_at")
+  updatedAt  DateTime       @updatedAt @map("updated_at")
+  messages   ChatMessage[]
+  customer   Customer       @relation(fields: [customerId], references: [id])
+
+  @@index([customerId], map: "support_tickets_customer_id_fkey")
+  @@map("support_tickets")
+}
+
+model ChatMessage {
+  id         Int            @id @default(autoincrement())
+  ticketId   Int            @map("ticket_id")
+  senderType ChatSenderType @map("sender_type")
+  senderId   Int            @map("sender_id")
+  content    String         @db.Text
+  createdAt  DateTime       @default(now()) @map("created_at")
+  ticket     SupportTicket  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId], map: "chat_messages_ticket_id_fkey")
+  @@map("chat_messages")
+}
+
+enum TicketStatus {
+  open
+  in_progress
+  closed
+}
+
+enum TicketPriority {
+  low
+  medium
+  high
+}
+
+enum ChatSenderType {
+  customer
+  admin
+}
+
+model ContactMessage {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(255)
+  email     String   @db.VarChar(255)
+  subject   String   @db.VarChar(255)
+  message   String   @db.Text
+  status    String   @default("new") @db.VarChar(50)  // new, read, replied
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("contact_messages")
+}
