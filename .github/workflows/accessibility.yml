@@ -2,7 +2,7 @@
 #
 # Runs tests/accessibility --project=chromium with zero axe rule changes:
 # any genuine axe violation fails the job (expectNoAxeViolations).
-# Same isolated test-DB prep as playwright.yml (MariaDB service +
+# Same isolated test-DB prep as playwright.yml (MySQL service +
 # migrate + seed_all). No secrets in logs or artifacts.
 
 name: accessibility
@@ -27,19 +27,19 @@ jobs:
       run:
         working-directory: ./frontend
     services:
-      mariadb:
-        image: mariadb:11
+      mysql:
+        image: mysql:8.0
         env:
-          MARIADB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
           # Lets the service start when the secret is missing so the
           # "Validate required secrets" step below can fail LOUDLY with the
           # missing names. No real password here; CI uses mjm_store_test only.
-          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "yes"
-          MARIADB_DATABASE: mjm_store_test
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: mjm_store_test
         ports:
           - 3306:3306
         options: >-
-          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-cmd="mysqladmin ping -h localhost -uroot --password=$MYSQL_ROOT_PASSWORD"
           --health-interval=10s --health-timeout=5s --health-retries=5
     env:
       NODE_ENV: test

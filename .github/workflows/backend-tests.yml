@@ -1,7 +1,7 @@
-# MJM Store — Backend tests (Jest unit + e2e) against an isolated MariaDB.
+# MJM Store — Backend tests (Jest unit + e2e) against an isolated MySQL DB.
 #
-# - MariaDB 11 service (free, no paid services). Test-only database
-#   `mjm_store_test` created by the service (MARIADB_DATABASE). Production
+# - MySQL 8.0 service (free, no paid services). Test-only database
+#   `mjm_store_test` created by the service (MYSQL_DATABASE). Production
 #   is never touched: e2e specs hardcode DATABASE_URL to mjm_store_test.
 # - Secrets required (names only, values stay masked):
 #     DB_ROOT_PASSWORD, JWT_SECRET (>=16 chars), JWT_REFRESH_SECRET (>=16)
@@ -32,19 +32,19 @@ jobs:
       run:
         working-directory: ./backend
     services:
-      mariadb:
-        image: mariadb:11
+      mysql:
+        image: mysql:8.0
         env:
-          MARIADB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
           # Lets the service start when the secret is missing so the
           # "Validate required secrets" step below can fail LOUDLY with the
           # missing names. No real password here; CI uses mjm_store_test only.
-          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "yes"
-          MARIADB_DATABASE: mjm_store_test
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: mjm_store_test
         ports:
           - 3306:3306
         options: >-
-          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-cmd="mysqladmin ping -h localhost -uroot --password=$MYSQL_ROOT_PASSWORD"
           --health-interval=10s --health-timeout=5s --health-retries=5
     env:
       NODE_ENV: test
