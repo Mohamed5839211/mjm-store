@@ -4,9 +4,10 @@
 # and mocked backend unit tests. Uses ONLY real repo scripts/commands:
 #   frontend: npx tsc --noEmit | npm run lint (eslint, WITHOUT --fix so CI
 #             never mutates files) | npm run build
-#   backend:  ./node_modules/.bin/tsc --noEmit | npx eslint (same globs as
-#             the repo `lint` script, without --fix) | npm run build |
-#             npm test (jest unit, all specs are mocked — no database)
+#   backend:  npx prisma generate (client needed before tsc/build/tests;
+#             no DB connection) | ./node_modules/.bin/tsc --noEmit |
+#             npx eslint (same globs as the repo `lint` script, without
+#             --fix) | npm run build | npm test (jest unit, mocked — no DB)
 # A failing check fails the job (no continue-on-error, no forced success).
 
 name: quality
@@ -57,6 +58,10 @@ jobs:
     defaults:
       run:
         working-directory: ./backend
+    env:
+      # Prisma generate resolves the datasource URL from config but never
+      # connects to a database. Plain localhost placeholder (no secret).
+      DATABASE_URL: mysql://root@localhost:3306/mjm_store
     steps:
       - uses: actions/checkout@v4
 
@@ -68,6 +73,9 @@ jobs:
 
       - name: Install (npm ci)
         run: npm ci
+
+      - name: Prisma generate (client must exist before tsc/build/tests)
+        run: npx prisma generate
 
       - name: TypeScript (noEmit)
         run: ./node_modules/.bin/tsc --noEmit
