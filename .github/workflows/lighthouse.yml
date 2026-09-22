@@ -41,7 +41,10 @@ jobs:
           --health-interval=10s --health-timeout=5s --health-retries=5
     env:
       NODE_ENV: test
-      DATABASE_URL: ${{ secrets.DATABASE_URL_TEST != '' && secrets.DATABASE_URL_TEST || format('mysql://root:{0}@127.0.0.1:3306/mjm_store_test', secrets.DB_ROOT_PASSWORD) }}
+      # MySQL 8 authenticates with caching_sha2_password; over plain-TCP CI the
+      # Node driver fetches the RSA public key (repo adapter supports this flag;
+      # localhost test DB only). A verbatim DATABASE_URL_TEST is used as-is.
+      DATABASE_URL: ${{ secrets.DATABASE_URL_TEST != '' && secrets.DATABASE_URL_TEST || format('mysql://root:{0}@127.0.0.1:3306/mjm_store_test?allowPublicKeyRetrieval=true', secrets.DB_ROOT_PASSWORD) }}
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
       JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
       FRONTEND_URL: http://localhost:3002
