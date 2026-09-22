@@ -7,7 +7,10 @@ import { AppModule } from './../src/app.module';
 import { PrismaService } from './../src/prisma/prisma.service';
 
 // Isolated database for end-to-end runs (never touches mjm_store).
-process.env.DATABASE_URL = 'mysql://root@localhost:3306/mjm_store_test';
+// Respects the CI-provided DATABASE_URL (credentials live in secrets);
+// falls back to the local passwordless default only when unset.
+process.env.DATABASE_URL =
+  process.env.DATABASE_URL || 'mysql://root@localhost:3306/mjm_store_test';
 process.env.JWT_SECRET =
   process.env.JWT_SECRET || 'mjm_super_secret_jwt_key_2026';
 process.env.JWT_REFRESH_SECRET =
